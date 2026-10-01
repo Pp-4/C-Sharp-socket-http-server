@@ -92,16 +92,20 @@ class Program
         }
         string resourceURI = GetURIFromHeaders(Encoding.UTF8.GetString(wholeRequest.GetBuffer().AsSpan(0, wholeRequest.GetBuffer().IndexOf("\r\n"u8))));
         Console.WriteLine("end of headers");
-        bool allowed = VerifyURI(resourceURI);
-        byte[] body = [];
+        byte[]? body = ResolveURI(resourceURI);
         byte[] headers;
-        if (allowed)
+        if (body is not null)
         {
-            body = GetFileFromURI(resourceURI);
+            HttpCodes returnCode = HttpCodes._200;
+
             if (body.Length == 0)
-                headers = HttpMessages.BuildResponse(HttpCodes._404, Connection.Close);
-            else
-                headers = Create200HttpHeader(body.Length);
+            {
+                body = ResolveURI("404.html");
+                returnCode = HttpCodes._404;
+            }
+            string contentType = GetContentType(returnCode == HttpCodes._404 ? ".html" : Path.GetExtension(resourceURI));
+            string additionalHeaders = body is null ? "" : $"Content-Length: {body.Length}\r\nContent-Type: {contentType}\r\n";
+            headers = HttpMessages.BuildResponse(returnCode, Connection.Close, additionalHeaders);
         }
         else
         {
@@ -109,59 +113,55 @@ class Program
         }
 
         await client.SendAsync(headers, SocketFlags.None);
-        if (body.Length > 0)
+        if (body is not null && body.Length > 0)
             await client.SendAsync(body, SocketFlags.None);
 
-        //client.Shutdown(SocketShutdown.Send); shutdown should be handled by whomever called this function
     }
     private static string GetURIFromHeaders(string headers)
     {
         string[] a = headers.Split(' ');
         if (a.Length < 2) return "404.html";
-        if(a[1][0] == '/') a[1] = a[1][1..^0];
+        if (a[1][0] == '/') a[1] = a[1][1..^0];
         if (a[1] == "") return "index.html";
+
         return a[1];
     }
-
-    private static bool VerifyURI(string resourceURI)
-    { //TODO - verify if URI is a correct one
-        return true;
-        //throw new NotImplementedException();
-    }
-
-    //important! verify uri BEFORE passing it to this function, as it does not check if the uri is correct and points to allowed resource
-    private static byte[] GetFileFromURI(string resourceURI = "404.html")
+    private static byte[]? ResolveURI(string resourceURI)
     {
-        string path = Path.Combine(root, resourceURI);
-        try
-        {
-            var resource = File.ReadAllBytes(path);
-            return resource;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine(ex.Message);
+        int querryStringLocation = resourceURI.IndexOfAny(['#', '?']);
+        if (querryStringLocation >= 0)
+            resourceURI = resourceURI[..querryStringLocation];
+
+        string relativeURI = Uri.UnescapeDataString(resourceURI).TrimStart('/');
+        string absolute = Path.GetFullPath(root);
+        string path = Path.GetFullPath(Path.Combine(absolute, relativeURI));
+        if (path.StartsWith(absolute + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             try
             {
-                var notFound = File.ReadAllBytes(Path.Combine(root, "404.html"));
-                return notFound;
+                var resource = File.ReadAllBytes(path);
+                return resource;
             }
             catch
             {
                 return [];
             }
-        }
+        else return null;
+    }
+    static string GetContentType(string fileExtension)
+    {
+        return fileExtension switch
+        {
+            ".css" => "text/css",
+            ".html" => "text/html",
+            ".png" => "image/png",
+            ".jpg" or ".jpeg" => "image/jpg",
+            ".ico" => "image/x-icon",
+            _ => "application/octet-stream"
+        };
     }
 
     static async Task WebpageHttps(Socket client)
     {//tls handshake, i don't want to deal with it, http only
         await Task.CompletedTask;
-    }
-    static byte[] Create200HttpHeader(int contentLength)
-    {
-        string headers =
-        "Content-Type: text/html; charset=utf-8\r\n" +
-        $"Content-Length: {contentLength}\r\n";
-        return HttpMessages.BuildResponse(HttpCodes._200, Connection.Close, headers);
     }
 }

@@ -32,7 +32,7 @@ public static class HttpMessages
         if (otherHeaders != "")
         {
             headers += otherHeaders;
-            if (otherHeaders[^1] != '\n' || otherHeaders[^2] != '\r') headers += "\r\n";
+            if (!otherHeaders.EndsWith("\r\n")) headers += "\r\n";
         }
         switch (connection)
         {
